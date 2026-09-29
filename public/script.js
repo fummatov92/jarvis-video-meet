@@ -14,6 +14,9 @@ let screenStream = null;
 let isScreenSharing = false;
 let isAudioMuted = false;
 let isVideoMuted = false;
+let isSpeakerOn = true; // Speaker (karnay) mode
+let audioOutputDevices = [];
+let currentAudioOutputIndex = 0;
 let currentFacingMode = 'user'; // 'user' (front) or 'environment' (back)
 let roomId = '';
 let myUserId = 'usr_' + Math.random().toString(36).substr(2, 9);
@@ -41,6 +44,9 @@ const localMicIcon = document.getElementById('local-mic-icon');
 const btnToggleMic = document.getElementById('btn-toggle-mic');
 const btnToggleCam = document.getElementById('btn-toggle-cam');
 const btnFlipCamActive = document.getElementById('btn-flip-cam-active');
+const btnToggleSpeaker = document.getElementById('btn-toggle-speaker');
+const speakerIcon = document.getElementById('speaker-icon');
+const speakerText = document.getElementById('speaker-text');
 const btnShareScreen = document.getElementById('btn-share-screen');
 const btnToggleChat = document.getElementById('btn-toggle-chat');
 const btnLeaveCall = document.getElementById('btn-leave-call');
@@ -60,7 +66,19 @@ if (paramRoom) {
   roomIdInput.value = paramRoom;
 }
 
-// 1. Initialize Local Stream
+// 1. Initialize Local Stream & Audio Devices
+async function loadAudioOutputDevices() {
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      audioOutputDevices = devices.filter(d => d.kind === 'audiooutput');
+      console.log('Available audio outputs:', audioOutputDevices);
+    }
+  } catch (err) {
+    console.warn('Cannot enumerate audio devices:', err);
+  }
+}
+
 async function getMediaStream(facingMode = 'user') {
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
@@ -71,7 +89,11 @@ async function getMediaStream(facingMode = 'user') {
       width: { ideal: 1280 },
       height: { ideal: 720 }
     },
-    audio: true
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    }
   };
   return await navigator.mediaDevices.getUserMedia(constraints);
 }
@@ -81,6 +103,7 @@ async function initLobbyPreview() {
     localStream = await getMediaStream(currentFacingMode);
     lobbyPreview.srcObject = localStream;
     previewStatus.textContent = 'Kamera faol';
+    await loadAudioOutputDevices();
   } catch (err) {
     console.warn('Lobby camera access error:', err);
     previewStatus.textContent = 'Kameraga ruxsat berilmadi';
@@ -95,13 +118,11 @@ async function flipCamera() {
   try {
     localStream = await getMediaStream(currentFacingMode);
     
-    // Update preview if in lobby
     if (lobbyScreen.classList.contains('active')) {
       lobbyPreview.srcObject = localStream;
       lobbyPreview.style.transform = (currentFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
     }
 
-    // Update active call if in meet
     if (meetScreen.classList.contains('active')) {
       localVideo.srcObject = localStream;
       localVideo.style.transform = (currentFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
@@ -123,7 +144,52 @@ async function flipCamera() {
 btnFlipPreview.addEventListener('click', flipCamera);
 btnFlipCamActive.addEventListener('click', flipCamera);
 
-// 2. Join Room Logic
+// 2. Speaker (Karnay / Dinamik) Toggle Logic
+async function toggleSpeakerOutput() {
+  await loadAudioOutputDevices();
+  isSpeakerOn = !isSpeakerOn;
+
+  const remoteVideos = document.querySelectorAll('.video-tile video');
+  
+  if (audioOutputDevices.length > 1 && typeof HTMLMediaElement.prototype.setSinkId === 'function') {
+    currentAudioOutputIndex = (currentAudioOutputIndex + 1) % audioOutputDevices.length;
+    const targetDevice = audioOutputDevices[currentAudioOutputIndex];
+    
+    for (const vid of remoteVideos) {
+      if (vid.id !== 'local-video' && typeof vid.setSinkId === 'function') {
+        try {
+          await vid.setSinkId(targetDevice.deviceId);
+        } catch (e) {
+          console.warn('setSinkId error:', e);
+        }
+      }
+    }
+    
+    const deviceLabel = targetDevice.label || `Chiqish ${currentAudioOutputIndex + 1}`;
+    showToast(`🔊 Chiqish: ${deviceLabel}`);
+  } else {
+    // Standard speakerphone / volume toggle fallback
+    for (const vid of remoteVideos) {
+      if (vid.id !== 'local-video') {
+        vid.volume = isSpeakerOn ? 1.0 : 0.4;
+      }
+    }
+    showToast(isSpeakerOn ? '🔊 Karnay (Baland ovoz) yoqildi' : '🔈 Standart dinamikga o\'tkazildi');
+  }
+
+  // Update button visual state
+  if (btnToggleSpeaker) {
+    btnToggleSpeaker.classList.toggle('off', !isSpeakerOn);
+    speakerIcon.textContent = isSpeakerOn ? '🔊' : '🔈';
+    speakerText.textContent = isSpeakerOn ? 'Karnay' : 'Dinamik';
+  }
+}
+
+if (btnToggleSpeaker) {
+  btnToggleSpeaker.addEventListener('click', toggleSpeakerOutput);
+}
+
+// 3. Join Room Logic
 btnJoinRoom.addEventListener('click', () => {
   myUserName = userNameInput.value.trim() || 'Foydalanuvchi_' + Math.floor(Math.random() * 1000);
   roomId = roomIdInput.value.trim() || 'room_' + Math.random().toString(36).substr(2, 6);
@@ -204,7 +270,7 @@ async function startMeeting() {
   });
 }
 
-// 3. WebRTC Peer Connection Helper
+// 4. WebRTC Peer Connection Helper
 function createPeerConnection(socketId, peerName, isInitiator) {
   const pc = new RTCPeerConnection(ICE_SERVERS);
   peers[socketId] = pc;
@@ -234,6 +300,14 @@ function createPeerConnection(socketId, peerName, isInitiator) {
       videoEl.id = `video-${socketId}`;
       videoEl.autoplay = true;
       videoEl.playsInline = true;
+
+      // Apply initial audio sink if configured
+      if (audioOutputDevices.length > 0 && typeof videoEl.setSinkId === 'function') {
+        const targetDevice = audioOutputDevices[currentAudioOutputIndex];
+        if (targetDevice) {
+          videoEl.setSinkId(targetDevice.deviceId).catch(err => console.warn(err));
+        }
+      }
 
       const overlay = document.createElement('div');
       overlay.className = 'tile-tag';
@@ -294,7 +368,7 @@ function updateGridLayout() {
   }
 }
 
-// 4. Controls Handling
+// 5. Controls Handling
 btnToggleMic.addEventListener('click', () => {
   if (!localStream) return;
   const audioTrack = localStream.getAudioTracks()[0];
@@ -363,7 +437,7 @@ function stopScreenShare() {
   isScreenSharing = false;
 }
 
-// 5. Chat Handling (Mobile Drawer)
+// 6. Chat Handling (Mobile Drawer)
 btnToggleChat.addEventListener('click', () => {
   chatPanel.classList.toggle('hidden');
   if (!chatPanel.classList.contains('hidden')) {
@@ -404,7 +478,7 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// 6. Copy Link & Toast
+// 7. Copy Link & Toast
 btnCopyLink.addEventListener('click', () => {
   const link = window.location.href;
   if (navigator.clipboard) {
@@ -424,7 +498,7 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-// 7. Leave Call
+// 8. Leave Call
 btnLeaveCall.addEventListener('click', () => {
   if (confirm('Suhbatdan chiqasizmi?')) {
     if (localStream) localStream.getTracks().forEach(t => t.stop());
