@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JarvisOS Video Meet | Xavfsiz Video Suhbat</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <!-- LOBBY SCREEN -->
+  <div id="lobby-screen" class="screen active">
+    <div class="lobby-card">
+      <div class="brand">
+        <div class="brand-icon">📹</div>
+        <div class="brand-text">
+          <h1>JarvisOS Meet</h1>
+          <p>Xavfsiz, tejamkor va P2P shifrlangan video suhbat</p>
+        </div>
+      </div>
+
+      <div class="lobby-preview-box">
+        <video id="lobby-preview" autoplay playsinline muted></video>
+        <div class="preview-overlay">
+          <span id="preview-status">Kamera yuklanmoqda...</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="user-name-input">Ismingiz:</label>
+        <input type="text" id="user-name-input" placeholder="Masalan: Fayzillo" maxlength="30" autofocus>
+      </div>
+
+      <div class="form-group">
+        <label for="room-id-input">Xona kodi (ixtiyoriy):</label>
+        <input type="text" id="room-id-input" placeholder="Bo'sh qoldirsangiz, yangi xona ochiladi">
+      </div>
+
+      <div class="lobby-actions">
+        <button id="btn-join-room" class="btn btn-primary">
+          <span>🚀 Xonaga Kirish</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MEETING ROOM SCREEN -->
+  <div id="meet-screen" class="screen">
+    <!-- Header -->
+    <header class="meet-header">
+      <div class="meet-info">
+        <span class="pulse-dot"></span>
+        <span class="room-label">Xona: <strong id="display-room-id">...</strong></span>
+      </div>
+      <div class="header-actions">
+        <button id="btn-copy-link" class="btn-icon-text" title="Xona havolasini nusxalash">
+          🔗 <span>Havolani Nusxalash</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="meet-main">
+      <div id="video-grid" class="video-grid">
+        <!-- Local Video Card -->
+        <div class="video-card" id="local-video-container">
+          <video id="local-video" autoplay playsinline muted></video>
+          <div class="video-overlay">
+            <span class="user-badge" id="local-user-badge">Siz (Boshlovchi)</span>
+            <div class="status-indicators">
+              <span id="local-mic-icon" class="indicator">🎤</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Side Chat Panel -->
+      <aside id="chat-panel" class="chat-panel">
+        <div class="chat-header">
+          <h3>💬 Xona Chati</h3>
+          <button id="btn-close-chat" class="btn-close">&times;</button>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <form id="chat-form" class="chat-input-bar">
+          <input type="text" id="chat-input" placeholder="Xabar yozing..." autocomplete="off">
+          <button type="submit" class="btn-send">Yuborish</button>
+        </form>
+      </aside>
+    </main>
+
+    <!-- Floating Control Bar -->
+    <footer class="meet-controls">
+      <button id="btn-toggle-mic" class="control-btn" title="Mikrofonni yoqish/o'chirish">
+        <span class="btn-icon">🎤</span>
+        <span class="btn-label">Ovoz</span>
+      </button>
+
+      <button id="btn-toggle-cam" class="control-btn" title="Kamerani yoqish/o'chirish">
+        <span class="btn-icon">📹</span>
+        <span class="btn-label">Video</span>
+      </button>
+
+      <button id="btn-share-screen" class="control-btn" title="Ekran ulashish">
+        <span class="btn-icon">🖥️</span>
+        <span class="btn-label">Ekran</span>
+      </button>
+
+      <button id="btn-toggle-chat" class="control-btn" title="Chatni ochish">
+        <span class="btn-icon">💬</span>
+        <span class="btn-label">Chat</span>
+        <span id="chat-badge" class="badge hidden">0</span>
+      </button>
+
+      <button id="btn-leave-call" class="control-btn btn-danger" title="Suhbatni tugatish">
+        <span class="btn-icon">📞</span>
+        <span class="btn-label">Chiqish</span>
+      </button>
+    </footer>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
