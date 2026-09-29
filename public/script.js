@@ -14,6 +14,7 @@ let screenStream = null;
 let isScreenSharing = false;
 let isAudioMuted = false;
 let isVideoMuted = false;
+let currentFacingMode = 'user'; // 'user' (front) or 'environment' (back)
 let roomId = '';
 let myUserId = 'usr_' + Math.random().toString(36).substr(2, 9);
 let myUserName = '';
@@ -28,6 +29,7 @@ const previewStatus = document.getElementById('preview-status');
 const userNameInput = document.getElementById('user-name-input');
 const roomIdInput = document.getElementById('room-id-input');
 const btnJoinRoom = document.getElementById('btn-join-room');
+const btnFlipPreview = document.getElementById('btn-flip-preview');
 
 const displayRoomId = document.getElementById('display-room-id');
 const btnCopyLink = document.getElementById('btn-copy-link');
@@ -38,6 +40,7 @@ const localMicIcon = document.getElementById('local-mic-icon');
 
 const btnToggleMic = document.getElementById('btn-toggle-mic');
 const btnToggleCam = document.getElementById('btn-toggle-cam');
+const btnFlipCamActive = document.getElementById('btn-flip-cam-active');
 const btnShareScreen = document.getElementById('btn-share-screen');
 const btnToggleChat = document.getElementById('btn-toggle-chat');
 const btnLeaveCall = document.getElementById('btn-leave-call');
@@ -50,36 +53,81 @@ const chatInput = document.getElementById('chat-input');
 const chatBadge = document.getElementById('chat-badge');
 const toast = document.getElementById('toast');
 
-// Auto-fill room from URL
+// Auto-fill room from URL query param
 const urlParams = new URLSearchParams(window.location.search);
 const paramRoom = urlParams.get('room');
 if (paramRoom) {
   roomIdInput.value = paramRoom;
 }
 
-// 1. Initialize Local Preview in Lobby
+// 1. Initialize Local Stream
+async function getMediaStream(facingMode = 'user') {
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+  }
+  const constraints = {
+    video: {
+      facingMode: facingMode,
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: true
+  };
+  return await navigator.mediaDevices.getUserMedia(constraints);
+}
+
 async function initLobbyPreview() {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: true
-    });
+    localStream = await getMediaStream(currentFacingMode);
     lobbyPreview.srcObject = localStream;
-    previewStatus.textContent = '🟢 Kamera va mikrofon faol';
+    previewStatus.textContent = 'Kamera faol';
   } catch (err) {
-    console.warn('Lobby media access error:', err);
-    previewStatus.textContent = '⚠️ Kamera/Mikrofonga ruxsat berilmadi';
+    console.warn('Lobby camera access error:', err);
+    previewStatus.textContent = 'Kameraga ruxsat berilmadi';
   }
 }
 
 initLobbyPreview();
+
+// Flip camera function (Mobile Support)
+async function flipCamera() {
+  currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
+  try {
+    localStream = await getMediaStream(currentFacingMode);
+    
+    // Update preview if in lobby
+    if (lobbyScreen.classList.contains('active')) {
+      lobbyPreview.srcObject = localStream;
+      lobbyPreview.style.transform = (currentFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
+    }
+
+    // Update active call if in meet
+    if (meetScreen.classList.contains('active')) {
+      localVideo.srcObject = localStream;
+      localVideo.style.transform = (currentFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
+
+      const videoTrack = localStream.getVideoTracks()[0];
+      for (const socketId in peers) {
+        const sender = peers[socketId].getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender && videoTrack) {
+          sender.replaceTrack(videoTrack);
+        }
+      }
+    }
+    showToast('🔄 Kamera almashtirildi');
+  } catch (e) {
+    console.error('Kamerani almashtirishda xatolik:', e);
+  }
+}
+
+btnFlipPreview.addEventListener('click', flipCamera);
+btnFlipCamActive.addEventListener('click', flipCamera);
 
 // 2. Join Room Logic
 btnJoinRoom.addEventListener('click', () => {
   myUserName = userNameInput.value.trim() || 'Foydalanuvchi_' + Math.floor(Math.random() * 1000);
   roomId = roomIdInput.value.trim() || 'room_' + Math.random().toString(36).substr(2, 6);
 
-  // Update URL without reload
   const newUrl = window.location.protocol + '//' + window.location.host + window.location.pathname + '?room=' + roomId;
   window.history.pushState({ path: newUrl }, '', newUrl);
 
@@ -92,17 +140,15 @@ async function startMeeting() {
   displayRoomId.textContent = roomId;
   localUserBadge.textContent = `${myUserName} (Siz)`;
 
-  // Attach local stream to meet screen
   if (!localStream) {
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localStream = await getMediaStream(currentFacingMode);
     } catch (e) {
       console.error('Error getting local stream:', e);
     }
   }
   localVideo.srcObject = localStream;
 
-  // Initialize Socket.io
   socket = io();
 
   socket.emit('join-room', {
@@ -111,13 +157,12 @@ async function startMeeting() {
     userName: myUserName
   });
 
-  // When a new peer joins
   socket.on('user-connected', async ({ socketId, userName }) => {
-    showToast(`👋 ${userName} xonaga qo'shildi`);
+    showToast(`👋 ${userName} qo'shildi`);
     createPeerConnection(socketId, userName, true);
+    updateGridLayout();
   });
 
-  // Handle incoming signaling
   socket.on('signal', async ({ from, userName, signal, data }) => {
     let pc = peers[from];
     if (!pc) {
@@ -133,8 +178,10 @@ async function startMeeting() {
         signal: 'answer',
         data: answer
       });
+      updateGridLayout();
     } else if (signal === 'answer') {
       await pc.setRemoteDescription(new RTCSessionDescription(data));
+      updateGridLayout();
     } else if (signal === 'candidate') {
       if (data) {
         await pc.addIceCandidate(new RTCIceCandidate(data)).catch(e => console.error(e));
@@ -142,20 +189,18 @@ async function startMeeting() {
     }
   });
 
-  // Chat message received
   socket.on('chat-message', (msg) => {
     appendChatMessage(msg);
-    if (chatPanel.classList.contains('hidden') || !chatPanel.offsetParent) {
+    if (chatPanel.classList.contains('hidden')) {
       unreadChatCount++;
-      chatBadge.textContent = unreadChatCount;
       chatBadge.classList.remove('hidden');
     }
   });
 
-  // Peer disconnected
   socket.on('user-disconnected', ({ socketId, userName }) => {
-    showToast(`🏃 ${userName || 'Foydalanuvchi'} xonani tark etdi`);
+    showToast(`🏃 ${userName || 'Foydalanuvchi'} chiqib ketdi`);
     removePeer(socketId);
+    updateGridLayout();
   });
 }
 
@@ -164,12 +209,10 @@ function createPeerConnection(socketId, peerName, isInitiator) {
   const pc = new RTCPeerConnection(ICE_SERVERS);
   peers[socketId] = pc;
 
-  // Add local tracks to peer
   if (localStream) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   }
 
-  // Handle ICE candidate
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       socket.emit('signal', {
@@ -180,13 +223,12 @@ function createPeerConnection(socketId, peerName, isInitiator) {
     }
   };
 
-  // Remote stream received
   pc.ontrack = (event) => {
-    let remoteVideoCard = document.getElementById(`card-${socketId}`);
-    if (!remoteVideoCard) {
-      remoteVideoCard = document.createElement('div');
-      remoteVideoCard.className = 'video-card';
-      remoteVideoCard.id = `card-${socketId}`;
+    let remoteVideoTile = document.getElementById(`card-${socketId}`);
+    if (!remoteVideoTile) {
+      remoteVideoTile = document.createElement('div');
+      remoteVideoTile.className = 'video-tile';
+      remoteVideoTile.id = `card-${socketId}`;
 
       const videoEl = document.createElement('video');
       videoEl.id = `video-${socketId}`;
@@ -194,18 +236,18 @@ function createPeerConnection(socketId, peerName, isInitiator) {
       videoEl.playsInline = true;
 
       const overlay = document.createElement('div');
-      overlay.className = 'video-overlay';
-      overlay.innerHTML = `<span class="user-badge">${peerName || 'Foydalanuvchi'}</span>`;
+      overlay.className = 'tile-tag';
+      overlay.innerHTML = `<span>${peerName || 'Foydalanuvchi'}</span><span>🔊</span>`;
 
-      remoteVideoCard.appendChild(videoEl);
-      remoteVideoCard.appendChild(overlay);
-      videoGrid.appendChild(remoteVideoCard);
+      remoteVideoTile.appendChild(videoEl);
+      remoteVideoTile.appendChild(overlay);
+      videoGrid.appendChild(remoteVideoTile);
 
       videoEl.srcObject = event.streams[0];
+      updateGridLayout();
     }
   };
 
-  // If initiator, create and send Offer
   if (isInitiator) {
     pc.onnegotiationneeded = async () => {
       try {
@@ -234,6 +276,22 @@ function removePeer(socketId) {
   if (card) {
     card.remove();
   }
+  updateGridLayout();
+}
+
+function updateGridLayout() {
+  const peerCount = Object.keys(peers).length;
+  if (peerCount > 0) {
+    videoGrid.classList.add('has-remote');
+  } else {
+    videoGrid.classList.remove('has-remote');
+  }
+
+  if (peerCount >= 2) {
+    videoGrid.classList.add('multi-peer');
+  } else {
+    videoGrid.classList.remove('multi-peer');
+  }
 }
 
 // 4. Controls Handling
@@ -244,7 +302,7 @@ btnToggleMic.addEventListener('click', () => {
     isAudioMuted = !isAudioMuted;
     audioTrack.enabled = !isAudioMuted;
     btnToggleMic.classList.toggle('off', isAudioMuted);
-    btnToggleMic.querySelector('.btn-icon').textContent = isAudioMuted ? '🔇' : '🎤';
+    btnToggleMic.querySelector('.bar-icon').textContent = isAudioMuted ? '🔇' : '🎤';
     localMicIcon.textContent = isAudioMuted ? '🔇' : '🎤';
   }
 });
@@ -256,7 +314,7 @@ btnToggleCam.addEventListener('click', () => {
     isVideoMuted = !isVideoMuted;
     videoTrack.enabled = !isVideoMuted;
     btnToggleCam.classList.toggle('off', isVideoMuted);
-    btnToggleCam.querySelector('.btn-icon').textContent = isVideoMuted ? '🚫' : '📹';
+    btnToggleCam.querySelector('.bar-icon').textContent = isVideoMuted ? '🚫' : '📹';
   }
 });
 
@@ -266,7 +324,6 @@ btnShareScreen.addEventListener('click', async () => {
       screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const screenTrack = screenStream.getVideoTracks()[0];
 
-      // Replace track for all peers
       for (const socketId in peers) {
         const sender = peers[socketId].getSenders().find(s => s.track && s.track.kind === 'video');
         if (sender) {
@@ -275,12 +332,13 @@ btnShareScreen.addEventListener('click', async () => {
       }
 
       localVideo.srcObject = screenStream;
+      localVideo.style.transform = 'none';
       btnShareScreen.classList.add('active');
       isScreenSharing = true;
 
       screenTrack.onended = () => stopScreenShare();
     } catch (err) {
-      console.warn('Screen share cancelled/failed:', err);
+      console.warn('Screen sharing cancelled/unsupported on this mobile device:', err);
     }
   } else {
     stopScreenShare();
@@ -300,11 +358,12 @@ function stopScreenShare() {
     }
   }
   localVideo.srcObject = localStream;
+  localVideo.style.transform = (currentFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
   btnShareScreen.classList.remove('active');
   isScreenSharing = false;
 }
 
-// 5. Chat Handling
+// 5. Chat Handling (Mobile Drawer)
 btnToggleChat.addEventListener('click', () => {
   chatPanel.classList.toggle('hidden');
   if (!chatPanel.classList.contains('hidden')) {
@@ -329,13 +388,13 @@ chatForm.addEventListener('submit', (e) => {
 function appendChatMessage({ userName, message, time }) {
   const isMe = (userName === myUserName);
   const msgEl = document.createElement('div');
-  msgEl.className = 'chat-msg';
+  msgEl.className = `chat-bubble ${isMe ? 'mine' : ''}`;
   msgEl.innerHTML = `
-    <div class="chat-msg-header">
-      <span class="chat-msg-author" style="color: ${isMe ? '#3b82f6' : '#10b981'}">${isMe ? 'Siz' : userName}</span>
-      <span class="chat-msg-time">${time}</span>
+    <div class="chat-bubble-header">
+      <span class="chat-bubble-author">${isMe ? 'Siz' : userName}</span>
+      <span>${time}</span>
     </div>
-    <div class="chat-msg-body">${escapeHtml(message)}</div>
+    <div class="chat-bubble-body">${escapeHtml(message)}</div>
   `;
   chatMessages.appendChild(msgEl);
   chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -348,31 +407,29 @@ function escapeHtml(str) {
 // 6. Copy Link & Toast
 btnCopyLink.addEventListener('click', () => {
   const link = window.location.href;
-  navigator.clipboard.writeText(link).then(() => {
-    showToast('📋 Xona havolasi nusxalandi!');
-  }).catch(() => {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(link).then(() => {
+      showToast('📋 Havola nusxalandi!');
+    }).catch(() => {
+      prompt('Xona havolasi:', link);
+    });
+  } else {
     prompt('Xona havolasi:', link);
-  });
+  }
 });
 
 function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 3000);
+  setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
 // 7. Leave Call
 btnLeaveCall.addEventListener('click', () => {
-  if (confirm('Suhbatdan chiqmoqchimisiz?')) {
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
-    }
-    if (screenStream) {
-      screenStream.getTracks().forEach(t => t.stop());
-    }
-    if (socket) {
-      socket.disconnect();
-    }
+  if (confirm('Suhbatdan chiqasizmi?')) {
+    if (localStream) localStream.getTracks().forEach(t => t.stop());
+    if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+    if (socket) socket.disconnect();
     window.location.href = window.location.pathname;
   }
 });

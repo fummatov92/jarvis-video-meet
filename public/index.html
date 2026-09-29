@@ -2,7 +2,10 @@
 <html lang="uz">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>JarvisOS Video Meet | Xavfsiz Video Suhbat</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,118 +14,124 @@
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-  <!-- LOBBY SCREEN -->
+  <!-- LOBBY SCREEN (Mobile First) -->
   <div id="lobby-screen" class="screen active">
-    <div class="lobby-card">
-      <div class="brand">
-        <div class="brand-icon">📹</div>
-        <div class="brand-text">
+    <div class="lobby-container">
+      <header class="lobby-header">
+        <div class="brand-logo">📹</div>
+        <div class="brand-info">
           <h1>JarvisOS Meet</h1>
-          <p>Xavfsiz, tejamkor va P2P shifrlangan video suhbat</p>
+          <p>Xavfsiz va tejamkor P2P video suhbat</p>
         </div>
-      </div>
+      </header>
 
-      <div class="lobby-preview-box">
+      <div class="lobby-preview-wrapper">
         <video id="lobby-preview" autoplay playsinline muted></video>
-        <div class="preview-overlay">
-          <span id="preview-status">Kamera yuklanmoqda...</span>
+        <div class="preview-badge">
+          <span class="status-dot"></span>
+          <span id="preview-status">Kamera faol</span>
         </div>
+        <button id="btn-flip-preview" class="btn-flip-cam" title="Kamerani almashtirish">🔄</button>
       </div>
 
-      <div class="form-group">
-        <label for="user-name-input">Ismingiz:</label>
-        <input type="text" id="user-name-input" placeholder="Masalan: Fayzillo" maxlength="30" autofocus>
-      </div>
+      <div class="lobby-form">
+        <div class="input-field">
+          <label for="user-name-input">Ismingiz</label>
+          <input type="text" id="user-name-input" placeholder="Ismingizni kiriting..." maxlength="25" autocomplete="name">
+        </div>
 
-      <div class="form-group">
-        <label for="room-id-input">Xona kodi (ixtiyoriy):</label>
-        <input type="text" id="room-id-input" placeholder="Bo'sh qoldirsangiz, yangi xona ochiladi">
-      </div>
+        <div class="input-field">
+          <label for="room-id-input">Xona kodi (ixtiyoriy)</label>
+          <input type="text" id="room-id-input" placeholder="Bo'sh qolsa yangi xona ochiladi" autocomplete="off">
+        </div>
 
-      <div class="lobby-actions">
-        <button id="btn-join-room" class="btn btn-primary">
-          <span>🚀 Xonaga Kirish</span>
+        <button id="btn-join-room" class="btn-primary-action">
+          <span>🚀 Suhbatga Kirish</span>
         </button>
       </div>
     </div>
   </div>
 
-  <!-- MEETING ROOM SCREEN -->
+  <!-- MEETING ROOM SCREEN (Mobile First) -->
   <div id="meet-screen" class="screen">
-    <!-- Header -->
-    <header class="meet-header">
-      <div class="meet-info">
-        <span class="pulse-dot"></span>
-        <span class="room-label">Xona: <strong id="display-room-id">...</strong></span>
+    <!-- Top Mobile Navigation Bar -->
+    <header class="meet-topbar">
+      <div class="room-pill">
+        <span class="live-dot"></span>
+        <span id="display-room-id" class="room-name">Xona</span>
       </div>
-      <div class="header-actions">
-        <button id="btn-copy-link" class="btn-icon-text" title="Xona havolasini nusxalash">
-          🔗 <span>Havolani Nusxalash</span>
+      <div class="topbar-actions">
+        <button id="btn-copy-link" class="btn-pill" title="Havolani nusxalash">
+          🔗 <span>Ulashish</span>
         </button>
       </div>
     </header>
 
-    <!-- Main Content Area -->
-    <main class="meet-main">
+    <!-- Video Stage -->
+    <main class="meet-stage">
       <div id="video-grid" class="video-grid">
-        <!-- Local Video Card -->
-        <div class="video-card" id="local-video-container">
+        <!-- Local User Video -->
+        <div class="video-tile local-tile" id="local-video-container">
           <video id="local-video" autoplay playsinline muted></video>
-          <div class="video-overlay">
-            <span class="user-badge" id="local-user-badge">Siz (Boshlovchi)</span>
-            <div class="status-indicators">
-              <span id="local-mic-icon" class="indicator">🎤</span>
-            </div>
+          <div class="tile-tag">
+            <span id="local-user-badge">Siz</span>
+            <span id="local-mic-icon">🎤</span>
           </div>
         </div>
       </div>
 
-      <!-- Side Chat Panel -->
-      <aside id="chat-panel" class="chat-panel">
-        <div class="chat-header">
+      <!-- Slide-over / Bottom-sheet Mobile Chat -->
+      <div id="chat-panel" class="chat-drawer hidden">
+        <div class="chat-drawer-handle" id="chat-drag-handle"></div>
+        <div class="chat-drawer-header">
           <h3>💬 Xona Chati</h3>
-          <button id="btn-close-chat" class="btn-close">&times;</button>
+          <button id="btn-close-chat" class="btn-close-drawer">&times;</button>
         </div>
-        <div id="chat-messages" class="chat-messages"></div>
-        <form id="chat-form" class="chat-input-bar">
+        <div id="chat-messages" class="chat-messages-scroll"></div>
+        <form id="chat-form" class="chat-input-form">
           <input type="text" id="chat-input" placeholder="Xabar yozing..." autocomplete="off">
-          <button type="submit" class="btn-send">Yuborish</button>
+          <button type="submit" class="btn-chat-send">➤</button>
         </form>
-      </aside>
+      </div>
     </main>
 
-    <!-- Floating Control Bar -->
-    <footer class="meet-controls">
-      <button id="btn-toggle-mic" class="control-btn" title="Mikrofonni yoqish/o'chirish">
-        <span class="btn-icon">🎤</span>
-        <span class="btn-label">Ovoz</span>
+    <!-- Bottom Mobile-First Controls -->
+    <footer class="meet-bottombar">
+      <button id="btn-toggle-mic" class="bar-btn" title="Mikrofon">
+        <span class="bar-icon">🎤</span>
+        <span class="bar-text">Ovoz</span>
       </button>
 
-      <button id="btn-toggle-cam" class="control-btn" title="Kamerani yoqish/o'chirish">
-        <span class="btn-icon">📹</span>
-        <span class="btn-label">Video</span>
+      <button id="btn-toggle-cam" class="bar-btn" title="Kamera">
+        <span class="bar-icon">📹</span>
+        <span class="bar-text">Video</span>
       </button>
 
-      <button id="btn-share-screen" class="control-btn" title="Ekran ulashish">
-        <span class="btn-icon">🖥️</span>
-        <span class="btn-label">Ekran</span>
+      <button id="btn-flip-cam-active" class="bar-btn" title="Kamerani almashtirish">
+        <span class="bar-icon">🔄</span>
+        <span class="bar-text">Burish</span>
       </button>
 
-      <button id="btn-toggle-chat" class="control-btn" title="Chatni ochish">
-        <span class="btn-icon">💬</span>
-        <span class="btn-label">Chat</span>
-        <span id="chat-badge" class="badge hidden">0</span>
+      <button id="btn-share-screen" class="bar-btn" title="Ekran ulashish">
+        <span class="bar-icon">🖥️</span>
+        <span class="bar-text">Ekran</span>
       </button>
 
-      <button id="btn-leave-call" class="control-btn btn-danger" title="Suhbatni tugatish">
-        <span class="btn-icon">📞</span>
-        <span class="btn-label">Chiqish</span>
+      <button id="btn-toggle-chat" class="bar-btn" title="Chat">
+        <span class="bar-icon">💬</span>
+        <span class="bar-text">Chat</span>
+        <span id="chat-badge" class="chat-unread-dot hidden"></span>
+      </button>
+
+      <button id="btn-leave-call" class="bar-btn btn-leave" title="Tugatish">
+        <span class="bar-icon">📞</span>
+        <span class="bar-text">Chiqish</span>
       </button>
     </footer>
   </div>
 
   <!-- Toast Notification -->
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast-popup"></div>
 
   <script src="script.js"></script>
 </body>
