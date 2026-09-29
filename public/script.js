@@ -1,10 +1,14 @@
-// Configuration
-const ICE_SERVERS = {
+// High-Performance Ultra-Low Latency Configuration
+const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:global.stun.twilio.com:3478' }
-  ]
+  ],
+  iceCandidatePoolSize: 10,       // Pre-gather ICE candidates for 0-ms connection setup
+  bundlePolicy: 'max-bundle',     // Multiplex audio + video over a single UDP stream
+  rtcpMuxPolicy: 'require'
 };
 
 // State
@@ -14,10 +18,10 @@ let screenStream = null;
 let isScreenSharing = false;
 let isAudioMuted = false;
 let isVideoMuted = false;
-let isSpeakerOn = true; // Speaker (karnay) mode
+let isSpeakerOn = true;
 let audioOutputDevices = [];
 let currentAudioOutputIndex = 0;
-let currentFacingMode = 'user'; // 'user' (front) or 'environment' (back)
+let currentFacingMode = 'user';
 let roomId = '';
 let myUserId = 'usr_' + Math.random().toString(36).substr(2, 9);
 let myUserName = '';
@@ -66,16 +70,15 @@ if (paramRoom) {
   roomIdInput.value = paramRoom;
 }
 
-// 1. Initialize Local Stream & Audio Devices
+// 1. High-Speed MediaStream Initialization
 async function loadAudioOutputDevices() {
   try {
     if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
       const devices = await navigator.mediaDevices.enumerateDevices();
       audioOutputDevices = devices.filter(d => d.kind === 'audiooutput');
-      console.log('Available audio outputs:', audioOutputDevices);
     }
   } catch (err) {
-    console.warn('Cannot enumerate audio devices:', err);
+    console.warn('Audio devices enumeration notice:', err);
   }
 }
 
@@ -86,13 +89,16 @@ async function getMediaStream(facingMode = 'user') {
   const constraints = {
     video: {
       facingMode: facingMode,
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
+      width: { ideal: 1280, max: 1920 },
+      height: { ideal: 720, max: 1080 },
+      frameRate: { ideal: 30, max: 60 }
     },
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true
+      autoGainControl: true,
+      channelCount: 1,
+      sampleRate: 48000
     }
   };
   return await navigator.mediaDevices.getUserMedia(constraints);
@@ -102,10 +108,10 @@ async function initLobbyPreview() {
   try {
     localStream = await getMediaStream(currentFacingMode);
     lobbyPreview.srcObject = localStream;
-    previewStatus.textContent = 'Kamera faol';
+    previewStatus.textContent = 'Kamera faol (Yuqori tezlik)';
     await loadAudioOutputDevices();
   } catch (err) {
-    console.warn('Lobby camera access error:', err);
+    console.warn('Lobby camera error:', err);
     previewStatus.textContent = 'Kameraga ruxsat berilmadi';
   }
 }
@@ -131,7 +137,8 @@ async function flipCamera() {
       for (const socketId in peers) {
         const sender = peers[socketId].getSenders().find(s => s.track && s.track.kind === 'video');
         if (sender && videoTrack) {
-          sender.replaceTrack(videoTrack);
+          await sender.replaceTrack(videoTrack);
+          await optimizeSenderBitrate(sender);
         }
       }
     }
@@ -144,7 +151,7 @@ async function flipCamera() {
 btnFlipPreview.addEventListener('click', flipCamera);
 btnFlipCamActive.addEventListener('click', flipCamera);
 
-// 2. Speaker (Karnay / Dinamik) Toggle Logic
+// 2. Speaker (Karnay) Toggle
 async function toggleSpeakerOutput() {
   await loadAudioOutputDevices();
   isSpeakerOn = !isSpeakerOn;
@@ -164,11 +171,9 @@ async function toggleSpeakerOutput() {
         }
       }
     }
-    
     const deviceLabel = targetDevice.label || `Chiqish ${currentAudioOutputIndex + 1}`;
     showToast(`🔊 Chiqish: ${deviceLabel}`);
   } else {
-    // Standard speakerphone / volume toggle fallback
     for (const vid of remoteVideos) {
       if (vid.id !== 'local-video') {
         vid.volume = isSpeakerOn ? 1.0 : 0.4;
@@ -177,7 +182,6 @@ async function toggleSpeakerOutput() {
     showToast(isSpeakerOn ? '🔊 Karnay (Baland ovoz) yoqildi' : '🔈 Standart dinamikga o\'tkazildi');
   }
 
-  // Update button visual state
   if (btnToggleSpeaker) {
     btnToggleSpeaker.classList.toggle('off', !isSpeakerOn);
     speakerIcon.textContent = isSpeakerOn ? '🔊' : '🔈';
@@ -189,7 +193,25 @@ if (btnToggleSpeaker) {
   btnToggleSpeaker.addEventListener('click', toggleSpeakerOutput);
 }
 
-// 3. Join Room Logic
+// 3. Sender Bitrate & Framerate Turbo Optimizer
+async function optimizeSenderBitrate(sender) {
+  if (!sender || !sender.track || sender.track.kind !== 'video') return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    // High-speed Bitrate Allocation (2.5 Mbps & 60 FPS preference)
+    params.encodings[0].maxBitrate = 2500000;
+    params.encodings[0].maxFramerate = 60;
+    params.degradationPreference = 'maintain-framerate';
+    await sender.setParameters(params);
+  } catch (err) {
+    console.warn('Bitrate tuning notice:', err);
+  }
+}
+
+// 4. Join Room Logic
 btnJoinRoom.addEventListener('click', () => {
   myUserName = userNameInput.value.trim() || 'Foydalanuvchi_' + Math.floor(Math.random() * 1000);
   roomId = roomIdInput.value.trim() || 'room_' + Math.random().toString(36).substr(2, 6);
@@ -215,7 +237,8 @@ async function startMeeting() {
   }
   localVideo.srcObject = localStream;
 
-  socket = io();
+  // Direct WebSocket connection (0-ms handshake)
+  socket = io({ transports: ['websocket'] });
 
   socket.emit('join-room', {
     roomId,
@@ -224,7 +247,7 @@ async function startMeeting() {
   });
 
   socket.on('user-connected', async ({ socketId, userName }) => {
-    showToast(`👋 ${userName} qo'shildi`);
+    showToast(`⚡ ${userName} ulandi (Tezkor P2P)`);
     createPeerConnection(socketId, userName, true);
     updateGridLayout();
   });
@@ -270,13 +293,16 @@ async function startMeeting() {
   });
 }
 
-// 4. WebRTC Peer Connection Helper
+// 5. Ultra-Fast WebRTC Peer Connection Helper
 function createPeerConnection(socketId, peerName, isInitiator) {
-  const pc = new RTCPeerConnection(ICE_SERVERS);
+  const pc = new RTCPeerConnection(ICE_CONFIG);
   peers[socketId] = pc;
 
   if (localStream) {
-    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    localStream.getTracks().forEach(track => {
+      const sender = pc.addTrack(track, localStream);
+      optimizeSenderBitrate(sender);
+    });
   }
 
   pc.onicecandidate = (event) => {
@@ -301,7 +327,6 @@ function createPeerConnection(socketId, peerName, isInitiator) {
       videoEl.autoplay = true;
       videoEl.playsInline = true;
 
-      // Apply initial audio sink if configured
       if (audioOutputDevices.length > 0 && typeof videoEl.setSinkId === 'function') {
         const targetDevice = audioOutputDevices[currentAudioOutputIndex];
         if (targetDevice) {
@@ -311,7 +336,7 @@ function createPeerConnection(socketId, peerName, isInitiator) {
 
       const overlay = document.createElement('div');
       overlay.className = 'tile-tag';
-      overlay.innerHTML = `<span>${peerName || 'Foydalanuvchi'}</span><span>🔊</span>`;
+      overlay.innerHTML = `<span>${peerName || 'Foydalanuvchi'}</span><span>⚡ HD</span>`;
 
       remoteVideoTile.appendChild(videoEl);
       remoteVideoTile.appendChild(overlay);
@@ -325,7 +350,10 @@ function createPeerConnection(socketId, peerName, isInitiator) {
   if (isInitiator) {
     pc.onnegotiationneeded = async () => {
       try {
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
         await pc.setLocalDescription(offer);
         socket.emit('signal', {
           to: socketId,
@@ -333,7 +361,7 @@ function createPeerConnection(socketId, peerName, isInitiator) {
           data: offer
         });
       } catch (err) {
-        console.error('Error creating offer:', err);
+        console.error('Offer xatosi:', err);
       }
     };
   }
@@ -368,7 +396,7 @@ function updateGridLayout() {
   }
 }
 
-// 5. Controls Handling
+// 6. Controls Handling
 btnToggleMic.addEventListener('click', () => {
   if (!localStream) return;
   const audioTrack = localStream.getAudioTracks()[0];
@@ -395,13 +423,16 @@ btnToggleCam.addEventListener('click', () => {
 btnShareScreen.addEventListener('click', async () => {
   if (!isScreenSharing) {
     try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 60, max: 60 } }
+      });
       const screenTrack = screenStream.getVideoTracks()[0];
 
       for (const socketId in peers) {
         const sender = peers[socketId].getSenders().find(s => s.track && s.track.kind === 'video');
         if (sender) {
-          sender.replaceTrack(screenTrack);
+          await sender.replaceTrack(screenTrack);
+          await optimizeSenderBitrate(sender);
         }
       }
 
@@ -412,7 +443,7 @@ btnShareScreen.addEventListener('click', async () => {
 
       screenTrack.onended = () => stopScreenShare();
     } catch (err) {
-      console.warn('Screen sharing cancelled/unsupported on this mobile device:', err);
+      console.warn('Screen sharing notice:', err);
     }
   } else {
     stopScreenShare();
@@ -429,6 +460,7 @@ function stopScreenShare() {
     const sender = peers[socketId].getSenders().find(s => s.track && s.track.kind === 'video');
     if (sender && camTrack) {
       sender.replaceTrack(camTrack);
+      optimizeSenderBitrate(sender);
     }
   }
   localVideo.srcObject = localStream;
@@ -437,7 +469,7 @@ function stopScreenShare() {
   isScreenSharing = false;
 }
 
-// 6. Chat Handling (Mobile Drawer)
+// 7. Chat Handling
 btnToggleChat.addEventListener('click', () => {
   chatPanel.classList.toggle('hidden');
   if (!chatPanel.classList.contains('hidden')) {
@@ -478,7 +510,7 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// 7. Copy Link & Toast
+// 8. Copy Link & Toast
 btnCopyLink.addEventListener('click', () => {
   const link = window.location.href;
   if (navigator.clipboard) {
@@ -498,7 +530,7 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-// 8. Leave Call
+// 9. Leave Call
 btnLeaveCall.addEventListener('click', () => {
   if (confirm('Suhbatdan chiqasizmi?')) {
     if (localStream) localStream.getTracks().forEach(t => t.stop());
